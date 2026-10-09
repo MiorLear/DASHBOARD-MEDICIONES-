@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Observatorio solar</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='6' fill='%23f5c15d'/%3E%3C/svg%3E" />
+</head>
+<body>
+  <div class="sky" aria-hidden="true"></div>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <div class="mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32">
+            <circle cx="16" cy="16" r="5.5" fill="#f5c15d"/>
+            <g stroke="#f5c15d" stroke-width="1.6" stroke-linecap="round">
+              <path d="M16 3.2v3.2M16 25.6V28.8M3.2 16h3.2M25.6 16h3.2"/>
+              <path d="M6.8 6.8l2.2 2.2M23 23l2.2 2.2M6.8 25.2 9 23M23 9l2.2-2.2"/>
+            </g>
+          </svg>
+        </div>
+        <div>
+          <p class="eyebrow">Observatorio solar</p>
+          <h1 id="system-name">Módulo de prueba</h1>
+          <p class="site-line" id="site-line">Sitio de medición</p>
+        </div>
+      </div>
+      <p class="status" id="status"><i></i><span id="status-text">Cargando</span></p>
+      <div class="actions">
+        <button type="button" class="primary" id="btn-add">Registrar medición</button>
+        <button type="button" id="btn-import">Importar CSV</button>
+        <button type="button" id="btn-export">Exportar</button>
+        <button type="button" id="btn-settings">Ajustes</button>
+      </div>
+    </header>
+
+    <div class="banner" id="banner" hidden></div>
+
+    <div class="section-label">
+      <h2>Última lectura</h2>
+      <span id="latest-when"></span>
+    </div>
+
+    <section class="kpis" aria-label="Mediciones actuales">
+      <button type="button" class="kpi" data-metric="voltage" style="--accent:#8eadd4">
+        <header>
+          <span>Voltaje</span>
+          <span class="kpi-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg>
+          </span>
+        </header>
+        <div class="kpi-main"><span class="kpi-value" id="kpi-v">—</span><span class="kpi-unit">V</span></div>
+        <p class="kpi-meta">Tensión de salida</p>
+        <svg class="spark" id="spark-v" viewBox="0 0 120 36" preserveAspectRatio="none"></svg>
+      </button>
+      <button type="button" class="kpi" data-metric="current" style="--accent:#3dceb0">
+        <header>
+          <span>Corriente</span>
+          <span class="kpi-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3l2-5 4 10 2-5h7"/></svg>
+          </span>
+        </header>
+        <div class="kpi-main"><span class="kpi-value" id="kpi-i">—</span><span class="kpi-unit">A</span></div>
+        <p class="kpi-meta">Corriente de salida</p>
+        <svg class="spark" id="spark-i" viewBox="0 0 120 36" preserveAspectRatio="none"></svg>
+      </button>
+      <button type="button" class="kpi" data-metric="radiation" style="--accent:#f5c518">
+        <header>
+          <span>Radiación solar</span>
+          <span class="kpi-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M18 6l-1.6 1.6M7.6 16.4 6 18"/></svg>
+          </span>
+        </header>
+        <div class="kpi-main"><span class="kpi-value" id="kpi-irr">—</span><span class="kpi-unit">W/m²</span></div>
+        <p class="kpi-meta">Irradiancia sobre el panel</p>
+        <svg class="spark" id="spark-irr" viewBox="0 0 120 36" preserveAspectRatio="none"></svg>
+      </button>
+      <button type="button" class="kpi" data-metric="temperature" style="--accent:#e07a62">
+        <header>
+          <span>Temperatura</span>
+          <span class="kpi-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M10 14.5V5.5a2 2 0 1 1 4 0v9a3.5 3.5 0 1 1-4 0z"/><path d="M12 9.5v5"/></svg>
+          </span>
+        </header>
+        <div class="kpi-main"><span class="kpi-value" id="kpi-t">—</span><span class="kpi-unit">°C</span></div>
+        <p class="kpi-meta">Superficie del panel</p>
+        <svg class="spark" id="spark-t" viewBox="0 0 120 36" preserveAspectRatio="none"></svg>
+      </button>
+    </section>
+
+    <section class="stage">
+      <article class="card behavior">
+        <div class="behavior-head">
+          <div>
+            <p class="kicker">Comportamiento del panel</p>
+            <h2 id="chart-title">Una curva llena de energía</h2>
+          </div>
+          <div class="chart-tools">
+            <label class="select-wrap">
+              <span class="sr">Medición de la gráfica</span>
+              <select id="metric-filter" aria-label="Medición de la gráfica">
+                <option value="power">Potencia</option>
+                <option value="voltage">Voltaje</option>
+                <option value="current">Corriente</option>
+                <option value="radiation">Radiación</option>
+                <option value="temperature">Temperatura</option>
+                <option value="humidity">Humedad</option>
+              </select>
+            </label>
+            <div class="span-toggle" role="tablist" aria-label="Ventana de tiempo">
+              <button type="button" data-span="day">Día</button>
+              <button type="button" data-span="period" class="active">Periodo</button>
+            </div>
+          </div>
+        </div>
+        <div class="legend" id="legend-main"></div>
+        <div class="chart-box tall"><canvas id="chart-main"></canvas></div>
+      </article>
+
+      <aside class="energy-card">
+        <header>
+          <span>Energía generada</span>
+          <label class="select-wrap period">
+            <span class="sr">Duración del periodo</span>
+            <select id="period-length" aria-label="Duración del periodo">
+              <option value="48h">48 h</option>
+              <option value="7d" selected>7 días</option>
+              <option value="all">Todo</option>
+            </select>
+          </label>
+        </header>
+        <p class="energy-value"><span id="kpi-e">—</span> <small id="unit-e">kWh</small></p>
+        <p class="energy-sub" id="energy-sub">Energía estimada del periodo</p>
+        <div class="energy-split">
+          <div>
+            <span>Potencia actual</span>
+            <strong id="now-power">—</strong>
+          </div>
+          <div>
+            <span>Pico del periodo</span>
+            <strong id="sum-peak">—</strong>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="layout">
+      <article class="card insights">
+        <div class="card-head">
+          <div>
+            <h2>Qué está pasando</h2>
+            <p>Lectura del comportamiento en este periodo</p>
+          </div>
+        </div>
+        <ol id="insights"></ol>
+      </article>
+
+      <article class="card span-2">
+        <div class="card-head">
+          <div>
+            <h2>Lecturas</h2>
+            <p id="table-meta"></p>
+          </div>
+          <button type="button" id="btn-more" hidden>Ver todas</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Hora</th>
+                <th>Voltaje</th>
+                <th>Corriente</th>
+                <th>Potencia</th>
+                <th>Radiación</th>
+                <th>T. panel</th>
+                <th>T. ambiente</th>
+                <th>Humedad</th>
+                <th class="wind-col">Viento</th>
+              </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <footer class="foot">
+      <span id="foot-count"></span>
+      <span>Las lecturas se guardan en este navegador. Exporta un CSV para no perderlas.</span>
+    </footer>
+  </div>
+
+  <dialog id="dlg-reading">
+    <form id="form-reading">
+      <header class="dlg-head">
+        <h2>Registrar medición</h2>
+        <p id="reading-hint">Anota lo que marcan los instrumentos. La potencia se calcula sola.</p>
+      </header>
+      <label>Fecha y hora
+        <input type="datetime-local" name="t" required />
+      </label>
+      <div class="grid-2">
+        <label>Voltaje (V)
+          <input name="v" type="number" inputmode="decimal" step="0.01" min="0" required placeholder="34.20" />
+        </label>
+        <label>Corriente (A)
+          <input name="i" type="number" inputmode="decimal" step="0.01" min="0" required placeholder="6.40" />
+        </label>
+        <label>Radiación (W/m²)
+          <input name="irr" type="number" inputmode="decimal" step="1" min="0" required placeholder="850" />
+        </label>
+        <label>Temp. del panel (°C)
+          <input name="tp" type="number" inputmode="decimal" step="0.1" required placeholder="46.0" />
+        </label>
+        <label>Temp. ambiente (°C)
+          <input name="ta" type="number" inputmode="decimal" step="0.1" placeholder="27.0" />
+        </label>
+        <label>Humedad (%)
+          <input name="h" type="number" inputmode="decimal" step="1" min="0" max="100" placeholder="45" />
+        </label>
+      </div>
+      <label>Viento (m/s, opcional)
+        <input name="wind" type="number" inputmode="decimal" step="0.1" min="0" placeholder="1.4" />
+      </label>
+      <div class="preview" id="reading-preview">Potencia instantánea —</div>
+      <footer class="dlg-actions">
+        <button type="button" id="reading-cancel">Cancelar</button>
+        <button type="submit" class="primary">Guardar lectura</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-settings">
+    <form id="form-settings">
+      <header class="dlg-head">
+        <h2>Ajustes</h2>
+        <p>El área del módulo se usa para la eficiencia y el rendimiento por metro cuadrado.</p>
+      </header>
+      <label>Nombre
+        <input id="set-name" type="text" maxlength="60" required />
+      </label>
+      <label>Ubicación
+        <input id="set-site" type="text" maxlength="80" />
+      </label>
+      <div class="grid-2">
+        <label>Área del panel (m²)
+          <input id="set-area" type="number" inputmode="decimal" step="0.01" min="0.01" required />
+        </label>
+        <label>Intervalo del sensor (s)
+          <input id="set-interval" type="number" inputmode="numeric" step="1" min="5" max="3600" />
+        </label>
+      </div>
+      <label>Dirección del sensor (opcional)
+        <input id="set-endpoint" type="url" placeholder="http://192.168.1.50/data" />
+      </label>
+      <p class="help">El sensor puede responder con JSON: voltage, current, irradiance, temp_panel, temp_ambient, humidity y wind. También sirven voltaje, corriente, radiacion, temperatura, temp_ambiente, humedad y viento. Si al abrir el archivo directo el navegador bloquea la petición, sirve esta carpeta con un servidor local.</p>
+      <footer class="dlg-actions">
+        <button type="button" id="btn-test-sensor">Probar sensor</button>
+        <button type="button" id="settings-cancel">Cerrar</button>
+        <button type="submit" class="primary">Guardar ajustes</button>
+      </footer>
+      <div class="danger-zone">
+        <button type="button" id="btn-demo">Cargar simulación de 5 días</button>
+        <button type="button" id="btn-template">Descargar plantilla CSV</button>
+        <button type="button" class="danger" id="btn-clear">Borrar historial</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <input type="file" id="file-csv" accept=".csv,text/csv,text/plain" hidden />
+  <script src="js/app.js"></script>
+</body>
+</html>
