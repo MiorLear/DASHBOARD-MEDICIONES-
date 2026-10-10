@@ -305,7 +305,7 @@
 
     <footer class="foot">
       <span id="foot-count"></span>
-      <span>Las lecturas se guardan en este navegador. Exporta un CSV para no perderlas.</span>
+      <span id="foot-note">Las lecturas se guardan en este navegador. Exporta un CSV para no perderlas.</span>
     </footer>
   </div>
 
@@ -389,6 +389,19 @@
           </label>
         </div>
         <p class="help">El ESP32 publica en <code>&lt;tema&gt;/datos</code>, <code>&lt;tema&gt;/termica</code> y <code>&lt;tema&gt;/estado</code>. El tema base debe ser el mismo que <code>TOPIC_BASE</code> en el firmware. Si abres el tablero por https, el broker debe ser wss://. Se guarda una lectura por cada intervalo del sensor.</p>
+      </fieldset>
+      <fieldset class="mqtt-set">
+        <legend>Historial en la nube (Supabase)</legend>
+        <label>URL del proyecto
+          <input id="set-sb-url" type="text" placeholder="https://abcdefgh.supabase.co" />
+        </label>
+        <label>Clave pública (anon o publishable)
+          <input id="set-sb-key" type="text" autocomplete="off" spellcheck="false" placeholder="sb_publishable_…" />
+        </label>
+        <label>Dispositivo
+          <input id="set-sb-device" type="text" placeholder="panel-k9m4" />
+        </label>
+        <p class="help">Con esto el tablero lee el historial completo que guarda el ESP32, igual en cualquier navegador. Usa solo la clave pública: nunca la <code>service_role</code> ni la contraseña de la base de datos.</p>
       </fieldset>
       <p class="help">El sensor puede responder con JSON: voltage, current, irradiance, temp_panel, temp_ambient, humidity y wind. También sirven voltaje, corriente, radiacion, temperatura, temp_ambiente, humedad y viento. Si al abrir el archivo directo el navegador bloquea la petición, sirve esta carpeta con un servidor local.</p>
       <footer class="dlg-actions">

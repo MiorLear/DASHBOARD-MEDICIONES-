@@ -49,6 +49,9 @@ function defaultSettings() {
     mqttUser: "",
     mqttPass: "",
     thermalMirror: false,
+    sbUrl: "",
+    sbKey: "",
+    sbDevice: "",
   };
 }
 
@@ -777,6 +780,7 @@ function renderSpark(id, values, color) {
 }
 
 function render() {
+  if (cloudActive() && !sim.active && cloud.range !== viewRange()) loadCloud();
   const all = readingsSource();
   const viewed = inRange(all, viewRange());
   const latest = all[all.length - 1] || null;
@@ -791,8 +795,11 @@ function render() {
   renderBanner();
   renderStatus();
   document.getElementById("foot-count").textContent = all.length
-    ? `${all.length.toLocaleString("es-MX")} lecturas guardadas`
+    ? `${all.length.toLocaleString("es-MX")} ${cloudActive() && !sim.active ? "puntos del historial en la nube" : "lecturas guardadas"}`
     : "Sin lecturas guardadas";
+  document.getElementById("foot-note").textContent = cloudActive() && !sim.active
+    ? "El historial vive en Supabase. Exportar descarga el registro completo, sin promediar."
+    : "Las lecturas se guardan en este navegador. Exporta un CSV para no perderlas.";
   document.querySelectorAll(".kpi[data-metric]").forEach((card) => {
     const on = card.dataset.metric === metric;
     card.classList.toggle("is-on", on);
@@ -1226,6 +1233,18 @@ function renderBanner() {
     banner.hidden = true;
     return;
   }
+  if (cloudActive()) {
+    if (cloud.error) {
+      banner.hidden = false;
+      banner.textContent = `No pude leer el historial de Supabase: ${cloud.error}. Revisa la URL, la clave pública y el dispositivo en ajustes.`;
+    } else if (cloud.range && !cloud.readings.length) {
+      banner.hidden = false;
+      banner.textContent = `Supabase está conectado, pero todavía no hay lecturas de «${state.settings.sbDevice}» en este periodo.`;
+    } else {
+      banner.hidden = true;
+    }
+    return;
+  }
   if (state.mode === "demo") {
     banner.hidden = false;
     banner.textContent = `Estás viendo una simulación de cinco días para un módulo de ${fmt(state.settings.area, 2)} m². Sirve para recorrer el tablero. Al registrar una medición, importar un CSV o recibir datos del sensor, la simulación se reemplaza.`;
@@ -1448,6 +1467,10 @@ function download(filename, text) {
 }
 
 function exportCSV() {
+  if (cloudActive() && !sim.active) {
+    exportCloudCSV().catch((error) => toast(error.message || "No pude descargar el registro."));
+    return;
+  }
   if (!state.readings.length) {
     toast("No hay lecturas para exportar.");
     return;
@@ -1538,6 +1561,9 @@ function openSettings() {
   document.getElementById("set-mqtt-topic").value = state.settings.mqttTopic;
   document.getElementById("set-mqtt-user").value = state.settings.mqttUser;
   document.getElementById("set-mqtt-pass").value = state.settings.mqttPass;
+  document.getElementById("set-sb-url").value = state.settings.sbUrl;
+  document.getElementById("set-sb-key").value = state.settings.sbKey;
+  document.getElementById("set-sb-device").value = state.settings.sbDevice || defaultDevice(state.settings.mqttTopic);
   document.getElementById("dlg-settings").showModal();
 }
 
@@ -1612,7 +1638,8 @@ function clockNow() {
 }
 
 function readingsSource() {
-  return sim.active ? sim.readings : state.readings;
+  if (sim.active) return sim.readings;
+  return cloudActive() ? cloud.readings : state.readings;
 }
 
 function simDayAt(minutes) {
@@ -1942,6 +1969,136 @@ function bindSim() {
   });
 }
 
+// ---------- Historial en la nube (Supabase) ----------
+// El ESP32 guarda cada lectura con registrar(); aquí solo se lee. historial() devuelve
+// promedios por tramo (máx. ~900 puntos) y el export baja las filas originales.
+const cloud = { readings: [], range: null, loading: false, error: null, frame: null };
+
+function cloudActive() {
+  const s = state.settings;
+  return !!(s.sbUrl && s.sbKey && s.sbDevice);
+}
+
+function defaultDevice(topic) {
+  const parts = String(topic || "").split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : "";
+}
+
+function resetCloud() {
+  cloud.readings = [];
+  cloud.range = null;
+  cloud.error = null;
+  cloud.frame = null;
+}
+
+async function sbRequest(path, options = {}) {
+  const key = state.settings.sbKey;
+  const headers = { apikey: key, "Content-Type": "application/json" };
+  // Las claves antiguas (JWT) van también como Bearer; las sb_publishable_ no
+  if (key.startsWith("eyJ")) headers.Authorization = `Bearer ${key}`;
+  const response = await fetch(`${state.settings.sbUrl}${path}`, { ...options, headers });
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = body.message || body.error || "";
+    } catch {
+      detail = "";
+    }
+    throw new Error(detail || `Supabase respondió ${response.status}`);
+  }
+  return response.json();
+}
+
+function rangeStart(key, now = Date.now()) {
+  if (key === "all") return null;
+  if (key === "today") return startOfDay(now);
+  if (key === "48h") return now - 48 * 3600000;
+  return now - 7 * 86400000;
+}
+
+async function loadCloud() {
+  if (!cloudActive() || cloud.loading) return;
+  const range = viewRange();
+  cloud.loading = true;
+  try {
+    const desde = rangeStart(range);
+    const rows = await sbRequest("/rest/v1/rpc/historial", {
+      method: "POST",
+      body: JSON.stringify({
+        p_dispositivo: state.settings.sbDevice,
+        p_desde: desde == null ? null : new Date(desde).toISOString(),
+        p_hasta: new Date().toISOString(),
+        p_puntos: 900,
+      }),
+    });
+    const history = rows
+      .map((r) => coerceReading({ t: Date.parse(r.t), v: r.voltaje, i: r.corriente, irr: r.irradiancia, tp: r.temp_panel, ta: r.temp_ambiente }))
+      .filter(Boolean);
+    const lastT = history.length ? history[history.length - 1].t : 0;
+    cloud.readings = [...history, ...cloud.readings.filter((r) => r.live && r.t > lastT)];
+    cloud.error = null;
+    if (!cloud.frame) loadCloudFrame();
+  } catch (error) {
+    cloud.error = error.message || "error desconocido";
+  } finally {
+    // Aunque falle se marca el rango para no reintentar en cada render; el temporizador reintenta
+    cloud.range = range;
+    cloud.loading = false;
+  }
+  render();
+}
+
+async function loadCloudFrame() {
+  try {
+    const device = encodeURIComponent(state.settings.sbDevice);
+    const rows = await sbRequest(`/rest/v1/termicas?select=creado,ancho,alto,datos&dispositivo=eq.${device}&order=creado.desc&limit=1`);
+    if (!rows.length) return;
+    const frame = parseThermal({ w: rows[0].ancho, h: rows[0].alto, scale: 10, data: rows[0].datos });
+    if (!frame) return;
+    frame.at = Date.parse(rows[0].creado);
+    frame.saved = true;
+    cloud.frame = frame;
+    renderThermal();
+  } catch {
+    // Sin imagen guardada el tablero sigue funcionando
+  }
+}
+
+// Las lecturas en vivo se suman al final del historial: una por cada 15 s, como las que guarda el ESP32
+function pushCloudLive(reading) {
+  const list = cloud.readings;
+  const last = list[list.length - 1];
+  if (last && last.live && reading.t - last.liveStart < 15000) {
+    list[list.length - 1] = { ...reading, live: true, liveStart: last.liveStart };
+  } else if (!last || reading.t > last.t) {
+    list.push({ ...reading, live: true, liveStart: reading.t });
+  }
+}
+
+async function exportCloudCSV() {
+  const device = state.settings.sbDevice;
+  const desde = rangeStart(viewRange());
+  const cols = "creado,voltaje,corriente,potencia,irradiancia,luz_pct,temp_ambiente,temp_panel,panel_min,panel_max,rssi";
+  const filter = `dispositivo=eq.${encodeURIComponent(device)}${desde == null ? "" : `&creado=gte.${encodeURIComponent(new Date(desde).toISOString())}`}`;
+  toast("Descargando el registro completo desde Supabase…");
+  const rows = [];
+  for (let offset = 0; ; offset += 1000) {
+    const page = await sbRequest(`/rest/v1/lecturas?select=${cols}&${filter}&order=creado.asc&limit=1000&offset=${offset}`);
+    rows.push(...page);
+    if (page.length < 1000) break;
+  }
+  if (!rows.length) {
+    toast("No hay lecturas guardadas en este periodo.");
+    return;
+  }
+  const header = "fecha,voltaje_V,corriente_A,potencia_W,irradiancia_Wm2,luz_pct,temp_ambiente_C,temp_panel_C,panel_min_C,panel_max_C,rssi_dBm";
+  const lines = rows.map((row) => cols.split(",").map((col) => row[col] ?? "").join(","));
+  const stamp = new Date().toISOString().slice(0, 10);
+  download(`registro-${device}-${rangeTitle(viewRange()).toLowerCase().replace(/\s+/g, "-")}-${stamp}.csv`, `﻿${header}\n${lines.join("\n")}\n`);
+  toast(`Exporté ${rows.length.toLocaleString("es-MX")} lecturas de Supabase.`);
+}
+
 function connectMqtt() {
   if (mqttClient) {
     mqttClient.end(true);
@@ -2036,6 +2193,7 @@ function ingestLive(reading) {
     saveState();
   }
   state.mode = "real";
+  if (cloudActive()) pushCloudLive(reading);
   render();
   if (replaced) toast("Llegó el ESP32 por MQTT. Quité la simulación y seguí con datos reales.");
 }
@@ -2082,7 +2240,7 @@ function renderThermal() {
   const box = document.querySelector(".thermal-box");
   box.classList.toggle("mirror", !!state.settings.thermalMirror);
   document.getElementById("btn-mirror").setAttribute("aria-pressed", state.settings.thermalMirror ? "true" : "false");
-  const frame = sim.active ? sim.frame : thermalFrame;
+  const frame = sim.active ? sim.frame : (thermalFrame || cloud.frame);
   const set = (id, value) => { document.getElementById(id).textContent = value; };
   document.getElementById("thermal-empty").hidden = !!frame;
   const note = document.getElementById("thermal-note");
@@ -2128,7 +2286,9 @@ function renderThermal() {
 
   set("thermal-meta", sim.active
     ? `Simulada · ${fmtTime.format(frame.at)} · ${frame.w}×${frame.h} px`
-    : `Actualizada ${fmtClock.format(frame.at)} · ${frame.w}×${frame.h} px`);
+    : frame.saved
+      ? `Última guardada · ${formatWhen(frame.at)} · ${frame.w}×${frame.h} px`
+      : `Actualizada ${fmtClock.format(frame.at)} · ${frame.w}×${frame.h} px`);
   set("thermal-min", `${fmt(frame.lo, 1)} °C`);
   set("thermal-max", `${fmt(frame.hi, 1)} °C`);
   set("thermal-lo", `${fmt(frame.lo, 1)} °C`);
@@ -2216,6 +2376,17 @@ function bind() {
       toast("Escribe el tema base, el mismo que TOPIC_BASE en el ESP32.");
       return;
     }
+    const sbUrl = document.getElementById("set-sb-url").value.trim().replace(/\/+$/, "");
+    const sbKey = document.getElementById("set-sb-key").value.trim();
+    const sbDevice = document.getElementById("set-sb-device").value.trim();
+    if (sbUrl && !/^https:\/\/[^/]+$/i.test(sbUrl)) {
+      toast("La URL de Supabase debe verse como https://abcdefgh.supabase.co");
+      return;
+    }
+    if (sbUrl && (!sbKey || !sbDevice)) {
+      toast("Para el historial faltan la clave pública y el dispositivo.");
+      return;
+    }
     const area = numFrom(document.getElementById("set-area").value);
     const nextArea = area && area > 0 ? area : 1.7;
     const areaChanged = Math.abs(nextArea - state.settings.area) > 0.0001;
@@ -2230,7 +2401,11 @@ function bind() {
       mqttUser: document.getElementById("set-mqtt-user").value.trim(),
       mqttPass: document.getElementById("set-mqtt-pass").value,
       thermalMirror: state.settings.thermalMirror,
+      sbUrl,
+      sbKey,
+      sbDevice,
     };
+    resetCloud();
     if (state.mode === "demo" && areaChanged) state.readings = generateDemo(nextArea);
     saveState();
     document.getElementById("dlg-settings").close();
@@ -2238,7 +2413,7 @@ function bind() {
     renderThermal();
     applyPoll();
     connectMqtt();
-    toast("Ajustes guardados.");
+    toast(cloudActive() ? "Ajustes guardados. Cargando el historial de Supabase…" : "Ajustes guardados.");
   });
 
   document.getElementById("btn-test-sensor").addEventListener("click", async () => {
@@ -2342,6 +2517,12 @@ function init() {
   connectMqtt();
   // index.html#simulador abre el simulador directo, útil para presentaciones
   if (location.hash === "#simulador") startSim();
+  // El historial en la nube se refresca cada minuto con lo que el ESP32 haya guardado
+  setInterval(() => {
+    if (!cloudActive() || sim.active) return;
+    cloud.range = null;
+    loadCloud();
+  }, 60000);
   setInterval(() => {
     if (mqttState === "ok" && Date.now() - lastMqttData > 20000) {
       mqttState = "stale";
