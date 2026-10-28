@@ -32,6 +32,7 @@ let armClear = false;
 const charts = {};
 let mqttClient = null;
 let mqttState = "off";
+let mqttFailures = 0;
 let lastMqttData = 0;
 let liveT = null;
 let lastCommitT = 0;
@@ -2151,6 +2152,7 @@ function connectMqtt() {
   mqttClient = client;
   client.on("connect", () => {
     if (client !== mqttClient) return;
+    mqttFailures = 0;
     client.subscribe([`${mqttTopic}/datos`, `${mqttTopic}/termica`, `${mqttTopic}/estado`]);
     if (mqttState !== "ok") mqttState = "waiting";
     renderStatus();
@@ -2160,9 +2162,12 @@ function connectMqtt() {
     mqttState = "connecting";
     renderStatus();
   });
+  // El broker público a veces rechaza el primer intento; mqtt.js reintenta solo a los 5 s,
+  // así que solo se avisa del error si falla varias veces seguidas
   client.on("error", () => {
     if (client !== mqttClient) return;
-    mqttState = "error";
+    mqttFailures += 1;
+    mqttState = mqttFailures >= 3 ? "error" : "connecting";
     renderStatus();
   });
   client.on("message", (topic, payload) => {
