@@ -37,6 +37,17 @@ let liveT = null;
 let lastCommitT = 0;
 let thermalFrame = null;
 
+// Fuentes del panel real. El tablero arranca conectado a ellas para mostrar mediciones
+// reales sin configurar nada. La clave de Supabase es la publicable: solo permite leer
+// (y llamar a registrar(), que exige el token secreto del ESP32).
+const DEFAULT_SOURCES = {
+  mqttUrl: "wss://broker.hivemq.com:8884/mqtt",
+  mqttTopic: "observatorio-solar/panel-k9m4",
+  sbUrl: "https://ixwewxwsjclbgttiguwe.supabase.co",
+  sbKey: "sb_publishable_JXV95QeB3gJRMn71o7q4JQ_UihDB3-K",
+  sbDevice: "panel-k9m4",
+};
+
 function defaultSettings() {
   return {
     name: "Módulo de prueba",
@@ -49,9 +60,7 @@ function defaultSettings() {
     mqttUser: "",
     mqttPass: "",
     thermalMirror: false,
-    sbUrl: "",
-    sbKey: "",
-    sbDevice: "",
+    ...DEFAULT_SOURCES,
   };
 }
 
@@ -62,10 +71,17 @@ function loadState() {
     const data = JSON.parse(raw);
     if (!data || !Array.isArray(data.readings)) return null;
     const settings = { ...defaultSettings(), ...data.settings };
+    // Ajustes guardados por versiones anteriores dejaban estas conexiones vacías
+    Object.keys(DEFAULT_SOURCES).forEach((key) => {
+      if (!settings[key]) settings[key] = DEFAULT_SOURCES[key];
+    });
     settings.area = Number(settings.area) > 0 ? Number(settings.area) : 1.7;
     settings.interval = Math.min(3600, Math.max(5, Number(settings.interval) || 15));
-    const readings = data.readings.map(coerceReading).filter(Boolean).sort((a, b) => a.t - b.t);
-    return { settings, readings, mode: data.mode === "demo" ? "demo" : "real" };
+    // La simulación de 5 días de versiones anteriores no son mediciones: se descarta
+    const readings = data.mode === "demo"
+      ? []
+      : data.readings.map(coerceReading).filter(Boolean).sort((a, b) => a.t - b.t);
+    return { settings, readings, mode: "real" };
   } catch {
     return null;
   }
@@ -2022,7 +2038,13 @@ async function loadCloud() {
   const range = viewRange();
   cloud.loading = true;
   try {
-    const desde = rangeStart(range);
+    let desde = rangeStart(range);
+    // Los tramos se calculan desde la primera lectura real del periodo; si no, con pocos
+    // datos en una vista de 7 días cada punto promediaría ~11 minutos
+    const device = encodeURIComponent(state.settings.sbDevice);
+    const since = desde == null ? "" : `&creado=gte.${encodeURIComponent(new Date(desde).toISOString())}`;
+    const first = await sbRequest(`/rest/v1/lecturas?select=creado&dispositivo=eq.${device}${since}&order=creado.asc&limit=1`);
+    if (first.length) desde = Date.parse(first[0].creado);
     const rows = await sbRequest("/rest/v1/rpc/historial", {
       method: "POST",
       body: JSON.stringify({
@@ -2505,8 +2527,7 @@ function bind() {
 
 function init() {
   if (!state) {
-    const settings = defaultSettings();
-    state = { settings, readings: generateDemo(settings.area), mode: "demo" };
+    state = { settings: defaultSettings(), readings: [], mode: "real" };
     saveState();
   }
   charts.main = new SolarChart(document.getElementById("chart-main"));
