@@ -1,5 +1,6 @@
 const STORAGE_KEY = "observatorio-solar-v1";
 const SOURCE_MIGRATION_KEY = "observatorio-solar-source-v2";
+const THEME_KEY = "observatorio-solar-theme";
 const SOLAR_RISE = 6.25;
 const SOLAR_SET = 18.75;
 const MAX_GAP_H = 1.5;
@@ -40,6 +41,33 @@ let lastMqttData = 0;
 let liveT = null;
 let lastCommitT = 0;
 let thermalFrame = null;
+
+function cssValue(name, fallback) {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function seriesColor(name, fallback) {
+  return cssValue(`--series-${name}`, fallback);
+}
+
+function applyTheme(theme, rerender = true) {
+  const selected = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = selected;
+  try { localStorage.setItem(THEME_KEY, selected); } catch { /* La interfaz sigue funcionando sin persistencia. */ }
+  const button = document.getElementById("btn-theme");
+  const label = document.getElementById("theme-label");
+  if (button) {
+    const isLight = selected === "light";
+    button.setAttribute("aria-pressed", isLight ? "true" : "false");
+    button.setAttribute("aria-label", isLight ? "Cambiar a modo oscuro" : "Cambiar a modo claro");
+    if (label) label.textContent = isLight ? "Oscuro" : "Claro";
+  }
+  if (rerender && charts.main) {
+    render();
+    renderThermal();
+  }
+}
 
 // Fuentes del observatorio. El tablero abre la serie modelada completa y permite volver
 // al panel real desde el selector. La clave de Supabase es la publicable: solo permite leer
@@ -621,7 +649,7 @@ class SolarChart {
     ctx.clearRect(0, 0, width, height);
     const cfg = this.cfg;
     if (!cfg || !cfg.series.some((s) => s.data.some((p) => Number.isFinite(p.y)))) {
-      ctx.fillStyle = "#93a0b8";
+      ctx.fillStyle = cssValue("--chart-text", "#93a0b8");
       ctx.font = "14px IBM Plex Sans, sans-serif";
       ctx.fillText("Sin lecturas en este periodo", 16, 28);
       return;
@@ -659,13 +687,13 @@ class SolarChart {
     ctx.textBaseline = "middle";
     yLeft.ticks.forEach((tick) => {
       const y = yOf(tick, yLeft);
-      ctx.strokeStyle = "rgba(255,255,255,0.06)";
+      ctx.strokeStyle = cssValue("--chart-grid", "rgba(255,255,255,0.06)");
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(pad.l, y);
       ctx.lineTo(width - pad.r, y);
       ctx.stroke();
-      ctx.fillStyle = "#93a0b8";
+      ctx.fillStyle = cssValue("--chart-text", "#93a0b8");
       ctx.fillText(formatTick(tick, yLeft.step), pad.l - 8, y);
     });
 
@@ -673,7 +701,7 @@ class SolarChart {
       ctx.textAlign = "left";
       yRight.ticks.forEach((tick) => {
         const y = yOf(tick, yRight);
-        ctx.fillStyle = "#93a0b8";
+        ctx.fillStyle = cssValue("--chart-text", "#93a0b8");
         ctx.fillText(formatTick(tick, yRight.step), width - pad.r + 8, y);
       });
     }
@@ -686,7 +714,7 @@ class SolarChart {
       const step = Math.max(1, Math.ceil(labels.length / availableLabels));
       labels.forEach((label, index) => {
         if (index % step !== 0 && index !== labels.length - 1) return;
-        ctx.fillStyle = "#93a0b8";
+        ctx.fillStyle = cssValue("--chart-text", "#93a0b8");
         ctx.fillText(label, xOf(index), height - 22);
       });
     } else {
@@ -702,7 +730,7 @@ class SolarChart {
         )).filter((tick, index, list) => index === 0 || tick !== list[index - 1]);
       }
       xTicks.forEach((tick) => {
-        ctx.fillStyle = "#93a0b8";
+        ctx.fillStyle = cssValue("--chart-text", "#93a0b8");
         ctx.fillText(cfg.xFormat ? cfg.xFormat(tick) : String(tick), xOf(tick), height - 22);
       });
     }
@@ -793,7 +821,7 @@ class SolarChart {
     });
     if (!rows.length) return;
 
-    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.strokeStyle = cssValue("--chart-guide", "rgba(255,255,255,0.18)");
     ctx.setLineDash([3, 4]);
     ctx.beginPath();
     const guideX = isBar ? xOf(xVal) : xOf(rows[0].point.x);
@@ -888,13 +916,15 @@ function drawTooltip(ctx, width, hoverX, y, title, lines) {
   const boxH = content.length * 18 + 12;
   let x = hoverX + 14;
   if (x + boxW > width - 8) x = hoverX - boxW - 14;
-  ctx.fillStyle = "rgba(10, 16, 28, 0.94)";
-  ctx.strokeStyle = "rgba(255,255,255,0.1)";
+  ctx.fillStyle = cssValue("--chart-tooltip-bg", "rgba(10, 16, 28, 0.94)");
+  ctx.strokeStyle = cssValue("--chart-tooltip-border", "rgba(255,255,255,0.1)");
   roundRect(ctx, x, y, boxW, boxH, 10);
   ctx.fill();
   ctx.stroke();
   content.forEach((line, index) => {
-    ctx.fillStyle = index === 0 && title ? "#f5c15d" : "#eef3fb";
+    ctx.fillStyle = index === 0 && title
+      ? cssValue("--chart-tooltip-accent", "#f5c15d")
+      : cssValue("--chart-tooltip-text", "#eef3fb");
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     ctx.fillText(line, x + 10, y + 8 + index * 18);
@@ -1017,10 +1047,10 @@ function renderKpis(latest, viewed) {
   set("kpi-irr", latest.irr == null ? "—" : fmt(latest.irr, 0));
   set("kpi-t", latest.tp == null ? "—" : fmt(latest.tp, 1));
   const sampled = stride(viewed, 48);
-  renderSpark("spark-v", sampled.map((r) => r.v), "#8eadd4");
-  renderSpark("spark-i", sampled.map((r) => r.i), "#3dceb0");
-  renderSpark("spark-irr", sampled.map((r) => r.irr), "#f5c518");
-  renderSpark("spark-t", sampled.map((r) => r.tp), "#e07a62");
+  renderSpark("spark-v", sampled.map((r) => r.v), seriesColor("blue", "#8eadd4"));
+  renderSpark("spark-i", sampled.map((r) => r.i), seriesColor("mint", "#3dceb0"));
+  renderSpark("spark-irr", sampled.map((r) => r.irr), seriesColor("gold", "#f5c518"));
+  renderSpark("spark-t", sampled.map((r) => r.tp), seriesColor("coral", "#e07a62"));
 }
 
 function renderEnergyCard(latest, viewed) {
@@ -1209,7 +1239,7 @@ function renderScatterAnalysis(relationship) {
   const sampled = stride(relationship.pairs, 850);
   const series = [{
     name: "Observaciones",
-    color: "#f2bb4b",
+    color: seriesColor("gold", "#f2bb4b"),
     type: "scatter",
     axis: "left",
     zero: true,
@@ -1222,7 +1252,7 @@ function renderScatterAnalysis(relationship) {
     const xMax = Math.max(...relationship.pairs.map((point) => point.x));
     series.push({
       name: "Regresión lineal",
-      color: "#7dd3b0",
+      color: seriesColor("mint", "#7dd3b0"),
       type: "line",
       axis: "left",
       zero: true,
@@ -1266,7 +1296,7 @@ function renderPowerHistogram(values) {
     labels,
     series: [{
       name: "Frecuencia",
-      color: "#7aa7d9",
+      color: seriesColor("blue", "#7aa7d9"),
       type: "bar",
       axis: "left",
       zero: true,
@@ -1346,7 +1376,7 @@ function renderDescriptiveStatistics(rows) {
 function buildMetricSeries(key, sampled) {
   const power = {
     name: "Potencia",
-    color: "#f5c518",
+    color: seriesColor("gold", "#f5c518"),
     type: "area",
     axis: "left",
     zero: true,
@@ -1356,7 +1386,7 @@ function buildMetricSeries(key, sampled) {
   };
   const irradiance = {
     name: "Irradiancia",
-    color: "#d7e2f0",
+    color: seriesColor("secondary", "#d7e2f0"),
     type: "line",
     dash: [5, 4],
     axis: "right",
@@ -1368,7 +1398,7 @@ function buildMetricSeries(key, sampled) {
   if (key === "voltage") {
     return [{
       name: "Voltaje",
-      color: "#8eadd4",
+      color: seriesColor("blue", "#8eadd4"),
       type: "line",
       axis: "left",
       zero: false,
@@ -1380,7 +1410,7 @@ function buildMetricSeries(key, sampled) {
   if (key === "current") {
     return [{
       name: "Corriente",
-      color: "#3dceb0",
+      color: seriesColor("mint", "#3dceb0"),
       type: "area",
       axis: "left",
       zero: true,
@@ -1392,7 +1422,7 @@ function buildMetricSeries(key, sampled) {
   if (key === "radiation") {
     return [{
       name: "Radiación",
-      color: "#f5c518",
+      color: seriesColor("gold", "#f5c518"),
       type: "area",
       axis: "left",
       zero: true,
@@ -1404,7 +1434,7 @@ function buildMetricSeries(key, sampled) {
   if (key === "temperature") {
     return [{
       name: "Panel",
-      color: "#e07a62",
+      color: seriesColor("coral", "#e07a62"),
       type: "area",
       axis: "left",
       zero: false,
@@ -1413,7 +1443,7 @@ function buildMetricSeries(key, sampled) {
       data: sampled.map((r) => ({ x: r.t, y: r.tp })),
     }, {
       name: "Ambiente",
-      color: "#c5d0e0",
+      color: seriesColor("secondary", "#c5d0e0"),
       type: "line",
       dash: [5, 4],
       axis: "left",
@@ -1426,7 +1456,7 @@ function buildMetricSeries(key, sampled) {
   if (key === "humidity") {
     return [{
       name: "Humedad",
-      color: "#7eb6ff",
+      color: seriesColor("blue", "#7eb6ff"),
       type: "line",
       axis: "left",
       zero: false,
@@ -2780,6 +2810,9 @@ function renderThermal() {
 }
 
 function bind() {
+  document.getElementById("btn-theme").addEventListener("click", () => {
+    applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+  });
   document.getElementById("analysis-scope").addEventListener("change", (event) => {
     analysisScope = event.target.value;
     renderAnalytics(inRange(readingsSource(), viewRange()));
@@ -3015,6 +3048,7 @@ function init() {
     localStorage.setItem(SOURCE_MIGRATION_KEY, "done");
     saveState();
   }
+  applyTheme(document.documentElement.dataset.theme, false);
   charts.main = new SolarChart(document.getElementById("chart-main"));
   charts.scatter = new SolarChart(document.getElementById("chart-scatter"));
   charts.histogram = new SolarChart(document.getElementById("chart-histogram"));
