@@ -21,6 +21,7 @@ let state = null;
 let periodRange = "all";
 let span = "period";
 let metric = "power";
+let analysisScope = "daylight";
 
 function viewRange() {
   return span === "day" ? "today" : periodRange;
@@ -347,6 +348,69 @@ function average(values) {
   return list.reduce((sum, n) => sum + n, 0) / list.length;
 }
 
+function quantile(values, q) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const position = (sorted.length - 1) * q;
+  const lower = Math.floor(position);
+  const weight = position - lower;
+  return sorted[lower + 1] == null
+    ? sorted[lower]
+    : sorted[lower] + (sorted[lower + 1] - sorted[lower]) * weight;
+}
+
+function describe(values) {
+  const list = values.filter(Number.isFinite);
+  if (!list.length) return null;
+  const mean = list.reduce((sum, value) => sum + value, 0) / list.length;
+  const variance = list.reduce((sum, value) => sum + (value - mean) ** 2, 0) / list.length;
+  return {
+    n: list.length,
+    min: Math.min(...list),
+    mean,
+    median: quantile(list, 0.5),
+    p95: quantile(list, 0.95),
+    max: Math.max(...list),
+    sd: Math.sqrt(variance),
+  };
+}
+
+function linearRelationship(rows) {
+  const pairs = rows
+    .map((reading) => ({ x: finiteOrNull(reading.irr), y: finiteOrNull(powerOf(reading)) }))
+    .filter((point) => point.x != null && point.y != null);
+  if (pairs.length < 2) return { pairs, r: null, slope: null, intercept: null };
+  const xMean = average(pairs.map((point) => point.x));
+  const yMean = average(pairs.map((point) => point.y));
+  let covariance = 0;
+  let xVariance = 0;
+  let yVariance = 0;
+  pairs.forEach((point) => {
+    const dx = point.x - xMean;
+    const dy = point.y - yMean;
+    covariance += dx * dy;
+    xVariance += dx * dx;
+    yVariance += dy * dy;
+  });
+  const divisor = Math.sqrt(xVariance * yVariance);
+  return {
+    pairs,
+    r: divisor > 0 ? covariance / divisor : null,
+    slope: xVariance > 0 ? covariance / xVariance : null,
+    intercept: xVariance > 0 ? yMean - (covariance / xVariance) * xMean : null,
+  };
+}
+
+function correlationLabel(value) {
+  const magnitude = Math.abs(value || 0);
+  if (!Number.isFinite(value)) return "sin suficientes datos";
+  if (magnitude >= 0.9) return "relación muy fuerte";
+  if (magnitude >= 0.7) return "relación fuerte";
+  if (magnitude >= 0.5) return "relación moderada";
+  if (magnitude >= 0.3) return "relación débil";
+  return "relación muy débil";
+}
+
 function stride(list, count) {
   if (list.length <= count) return list;
   const out = [];
@@ -558,7 +622,7 @@ class SolarChart {
     const cfg = this.cfg;
     if (!cfg || !cfg.series.some((s) => s.data.some((p) => Number.isFinite(p.y)))) {
       ctx.fillStyle = "#93a0b8";
-      ctx.font = "14px Outfit, Segoe UI, sans-serif";
+      ctx.font = "14px IBM Plex Sans, sans-serif";
       ctx.fillText("Sin lecturas en este periodo", 16, 28);
       return;
     }
@@ -590,7 +654,7 @@ class SolarChart {
     const xOf = (x) => pad.l + ((x - xMin) / (xMax - xMin)) * plotW;
     const yOf = (y, scale) => pad.t + plotH - ((y - scale.min) / (scale.max - scale.min)) * plotH;
 
-    ctx.font = "11px Outfit, Segoe UI, sans-serif";
+    ctx.font = "11px IBM Plex Sans, sans-serif";
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
     yLeft.ticks.forEach((tick) => {
@@ -618,7 +682,8 @@ class SolarChart {
     ctx.textBaseline = "top";
     if (isBar) {
       const labels = cfg.labels || [];
-      const step = labels.length > 12 ? 2 : 1;
+      const availableLabels = Math.max(2, Math.floor(plotW / 48));
+      const step = Math.max(1, Math.ceil(labels.length / availableLabels));
       labels.forEach((label, index) => {
         if (index % step !== 0 && index !== labels.length - 1) return;
         ctx.fillStyle = "#93a0b8";
@@ -627,8 +692,15 @@ class SolarChart {
     } else {
       const explicitTicks = cfg.xTicks && cfg.xTicks.length ? cfg.xTicks : null;
       const timedTicks = !explicitTicks && cfg.timeRange ? timeTicks(xMin, xMax) : null;
-      const xTicks = (explicitTicks || (timedTicks && timedTicks.length ? timedTicks : niceTicks(xMin, xMax, 5).ticks))
+      let xTicks = (explicitTicks || (timedTicks && timedTicks.length ? timedTicks : niceTicks(xMin, xMax, 5).ticks))
         .filter((tick) => tick >= xMin - (xMax - xMin) * 0.02 && tick <= xMax + (xMax - xMin) * 0.02);
+      const availableTicks = Math.max(2, Math.floor(plotW / 68));
+      if (xTicks.length > availableTicks) {
+        const sourceTicks = xTicks;
+        xTicks = Array.from({ length: availableTicks }, (_, index) => (
+          sourceTicks[Math.round((index / (availableTicks - 1)) * (sourceTicks.length - 1))]
+        )).filter((tick, index, list) => index === 0 || tick !== list[index - 1]);
+      }
       xTicks.forEach((tick) => {
         ctx.fillStyle = "#93a0b8";
         ctx.fillText(cfg.xFormat ? cfg.xFormat(tick) : String(tick), xOf(tick), height - 22);
@@ -655,6 +727,17 @@ class SolarChart {
           grad.addColorStop(1, hexToRgba(series.color, 0.25));
           ctx.fillStyle = grad;
           roundRect(ctx, x, y, bw, Math.max(1, bh), 5);
+          ctx.fill();
+        });
+        return;
+      }
+
+      if (series.type === "scatter") {
+        ctx.fillStyle = hexToRgba(series.color, 0.42);
+        series.data.forEach((point) => {
+          if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+          ctx.beginPath();
+          ctx.arc(xOf(point.x), yOf(point.y, scale), 2.2, 0, Math.PI * 2);
           ctx.fill();
         });
         return;
@@ -799,7 +882,7 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 function drawTooltip(ctx, width, hoverX, y, title, lines) {
-  ctx.font = "12px Outfit, Segoe UI, sans-serif";
+  ctx.font = "12px IBM Plex Sans, sans-serif";
   const content = title ? [title, ...lines] : lines;
   const boxW = Math.max(...content.map((line) => ctx.measureText(line).width)) + 20;
   const boxH = content.length * 18 + 12;
@@ -867,6 +950,7 @@ function render() {
   renderInsights(all, viewed);
   renderVitals(latest, all);
   renderCharts(viewed);
+  renderAnalytics(viewed);
   renderTable(viewed);
   renderBanner();
   renderStatus();
@@ -1093,6 +1177,172 @@ function renderCharts(viewed) {
   renderLegend("legend-main", series, true);
 }
 
+function renderAnalytics(viewed) {
+  const validRows = viewed.filter((reading) => reading.valid !== false);
+  const analyzed = analysisScope === "daylight"
+    ? validRows.filter((reading) => reading.irr != null && reading.irr >= PANEL_MIN_LIGHT_WM2)
+    : validRows;
+  const powerValues = analyzed.map((reading) => Math.max(0, powerOf(reading))).filter(Number.isFinite);
+  const powerStats = describe(powerValues);
+  const relationshipRows = analyzed.filter((reading) => reading.irr != null && reading.irr >= PANEL_MIN_LIGHT_WM2);
+  const relationship = linearRelationship(relationshipRows);
+  const coverage = viewed.length ? (analyzed.length / viewed.length) * 100 : 0;
+
+  document.getElementById("stat-n").textContent = analyzed.length.toLocaleString("es-MX");
+  document.getElementById("stat-coverage").textContent = analysisScope === "daylight"
+    ? `${fmt(coverage, 1)} % del periodo con luz suficiente`
+    : `${fmt(coverage, 1)} % de registros válidos`;
+  document.getElementById("stat-mean-power").textContent = powerStats ? `${fmt(powerStats.mean, 3)} W` : "—";
+  document.getElementById("stat-p95-power").textContent = powerStats ? `${fmt(powerStats.p95, 3)} W` : "—";
+  document.getElementById("stat-correlation").textContent = relationship.r == null ? "—" : fmt(relationship.r, 3);
+  document.getElementById("stat-correlation-label").textContent = relationship.r == null
+    ? "coeficiente de Pearson"
+    : `${correlationLabel(relationship.r)} · Pearson r`;
+
+  renderScatterAnalysis(relationship);
+  renderPowerHistogram(powerValues);
+  renderAnomalyBreakdown(analyzed);
+  renderDescriptiveStatistics(analyzed);
+}
+
+function renderScatterAnalysis(relationship) {
+  const sampled = stride(relationship.pairs, 850);
+  const series = [{
+    name: "Observaciones",
+    color: "#f2bb4b",
+    type: "scatter",
+    axis: "left",
+    zero: true,
+    unit: "W",
+    digits: 3,
+    data: sampled,
+  }];
+  if (relationship.slope != null && relationship.intercept != null && relationship.pairs.length) {
+    const xMin = Math.min(...relationship.pairs.map((point) => point.x));
+    const xMax = Math.max(...relationship.pairs.map((point) => point.x));
+    series.push({
+      name: "Regresión lineal",
+      color: "#7dd3b0",
+      type: "line",
+      axis: "left",
+      zero: true,
+      unit: "W",
+      digits: 3,
+      data: [
+        { x: xMin, y: Math.max(0, relationship.intercept + relationship.slope * xMin) },
+        { x: xMax, y: Math.max(0, relationship.intercept + relationship.slope * xMax) },
+      ],
+    });
+  }
+  charts.scatter.setConfig({
+    series,
+    xFormat: (value) => fmt(value, 0),
+    tooltipTitle: (point) => `${fmt(point.x, 0)} W/m²`,
+  });
+  document.getElementById("scatter-note").textContent = relationship.pairs.length
+    ? `${relationship.pairs.length.toLocaleString("es-MX")} pares válidos; se muestran hasta 850 para mantener la gráfica legible.`
+    : "No hay pares válidos de irradiancia y potencia en este periodo.";
+  document.getElementById("regression-equation").textContent = relationship.slope == null
+    ? "Sin ajuste"
+    : `P = ${fmt(relationship.slope, 4)}·G ${relationship.intercept >= 0 ? "+" : "−"} ${fmt(Math.abs(relationship.intercept), 3)}`;
+}
+
+function renderPowerHistogram(values) {
+  if (!values.length) {
+    charts.histogram.setConfig({ series: [], kind: "bar", labels: [] });
+    return;
+  }
+  const binCount = 12;
+  const max = Math.max(...values);
+  const width = max > 0 ? max / binCount : 1 / binCount;
+  const bins = Array(binCount).fill(0);
+  values.forEach((value) => {
+    const index = Math.min(binCount - 1, Math.floor(value / width));
+    bins[index] += 1;
+  });
+  const labels = bins.map((_, index) => fmt(index * width, max >= 10 ? 1 : 2));
+  charts.histogram.setConfig({
+    kind: "bar",
+    labels,
+    series: [{
+      name: "Frecuencia",
+      color: "#7aa7d9",
+      type: "bar",
+      axis: "left",
+      zero: true,
+      unit: "registros",
+      digits: 0,
+      data: bins.map((count, index) => ({ x: index, y: count })),
+    }],
+    tooltipTitle: (point) => `${labels[point.x]}–${fmt((point.x + 1) * width, max >= 10 ? 1 : 2)} W`,
+  });
+}
+
+function renderAnomalyBreakdown(rows) {
+  const host = document.getElementById("anomaly-breakdown");
+  const counts = new Map();
+  rows.forEach((reading) => {
+    const label = conditionLabel(reading.anomaly);
+    counts.set(label, (counts.get(label) || 0) + 1);
+  });
+  const entries = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const total = Math.max(1, rows.length);
+  const top = entries.slice(0, 6);
+  const remainder = entries.slice(6).reduce((sum, entry) => sum + entry[1], 0);
+  if (remainder) top.push(["Otras condiciones", remainder]);
+  host.replaceChildren(...top.map(([label, count], index) => {
+    const row = document.createElement("div");
+    row.className = "anomaly-row";
+    const head = document.createElement("div");
+    const name = document.createElement("span");
+    const value = document.createElement("strong");
+    name.textContent = label;
+    value.textContent = `${fmt((count / total) * 100, 1)} %`;
+    head.append(name, value);
+    const track = document.createElement("i");
+    const fill = document.createElement("b");
+    fill.style.setProperty("--share", `${(count / total) * 100}%`);
+    fill.style.setProperty("--bar-index", String(index));
+    track.appendChild(fill);
+    row.append(head, track);
+    return row;
+  }));
+  const abnormal = rows.filter((reading) => reading.anomaly && reading.anomaly !== "normal").length;
+  document.getElementById("anomaly-summary").textContent = rows.length
+    ? `${abnormal.toLocaleString("es-MX")} lecturas (${fmt((abnormal / rows.length) * 100, 1)} %) tienen una condición registrada.`
+    : "No hay lecturas en la población seleccionada.";
+}
+
+function renderDescriptiveStatistics(rows) {
+  const specs = [
+    ["Voltaje", "V", 3, (reading) => reading.v],
+    ["Corriente", "A", 4, (reading) => reading.i],
+    ["Potencia", "W", 4, (reading) => Math.max(0, powerOf(reading))],
+    ["Irradiancia", "W/m²", 1, (reading) => reading.irr],
+    ["Temperatura del panel", "°C", 2, (reading) => reading.tp],
+  ];
+  const body = document.getElementById("stats-tbody");
+  body.replaceChildren(...specs.map(([label, unit, digits, valueOf]) => {
+    const stats = describe(rows.map(valueOf));
+    const tr = document.createElement("tr");
+    const values = stats
+      ? [label, stats.n.toLocaleString("es-MX"), stats.min, stats.mean, stats.median, stats.p95, stats.max, stats.sd]
+      : [label, "0", null, null, null, null, null, null];
+    values.forEach((value, index) => {
+      const td = document.createElement("td");
+      if (index === 0) {
+        td.innerHTML = `<strong>${label}</strong><small>${unit}</small>`;
+      } else if (index === 1) {
+        td.textContent = value;
+      } else {
+        td.textContent = value == null ? "—" : fmt(value, digits);
+      }
+      tr.appendChild(td);
+    });
+    return tr;
+  }));
+}
+
 function buildMetricSeries(key, sampled) {
   const power = {
     name: "Potencia",
@@ -1282,7 +1532,7 @@ function renderTable(viewed) {
     const td = document.createElement("td");
     td.colSpan = 12;
     td.textContent = "Registra una medición o importa un CSV para ver la tabla.";
-    td.style.fontFamily = "Outfit, Segoe UI, sans-serif";
+    td.style.fontFamily = "IBM Plex Sans, sans-serif";
     tr.appendChild(td);
     body.appendChild(tr);
     return;
@@ -2530,6 +2780,10 @@ function renderThermal() {
 }
 
 function bind() {
+  document.getElementById("analysis-scope").addEventListener("change", (event) => {
+    analysisScope = event.target.value;
+    renderAnalytics(inRange(readingsSource(), viewRange()));
+  });
   document.getElementById("device-filter").addEventListener("change", (event) => {
     state.settings.sbDevice = event.target.value;
     span = "period";
@@ -2762,6 +3016,8 @@ function init() {
     saveState();
   }
   charts.main = new SolarChart(document.getElementById("chart-main"));
+  charts.scatter = new SolarChart(document.getElementById("chart-scatter"));
+  charts.histogram = new SolarChart(document.getElementById("chart-histogram"));
   bind();
   render();
   renderThermal();

@@ -6,7 +6,7 @@
   <title>Observatorio solar</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Sora:wght@500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/styles.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='6' fill='%23f5c15d'/%3E%3C/svg%3E" />
 </head>
@@ -128,7 +128,7 @@
       </div>
     </div>
 
-    <section class="kpis" aria-label="Mediciones actuales">
+    <section class="kpis" id="overview" aria-label="Mediciones actuales">
       <button type="button" class="kpi" data-metric="voltage" style="--accent:#8eadd4">
         <header>
           <span>Voltaje</span>
@@ -240,6 +240,110 @@
           </div>
         </div>
       </aside>
+    </section>
+
+    <section class="analytics" id="analysis" aria-labelledby="analytics-title">
+      <header class="analytics-head">
+        <div>
+          <p class="kicker">Laboratorio de datos</p>
+          <h2 id="analytics-title">Análisis estadístico</h2>
+          <p>Distribución, variabilidad y relación entre la radiación recibida y la respuesta eléctrica del panel.</p>
+        </div>
+        <label class="select-wrap analysis-scope">
+          <span>Población analizada</span>
+          <select id="analysis-scope">
+            <option value="daylight">Con irradiancia ≥ 25 W/m²</option>
+            <option value="all">Todos los registros válidos</option>
+          </select>
+        </label>
+      </header>
+
+      <div class="analysis-kpis" aria-label="Resumen estadístico">
+        <article>
+          <span>Muestras analizadas</span>
+          <strong id="stat-n">—</strong>
+          <small id="stat-coverage">del periodo seleccionado</small>
+        </article>
+        <article>
+          <span>Potencia media</span>
+          <strong id="stat-mean-power">—</strong>
+          <small>promedio aritmético</small>
+        </article>
+        <article>
+          <span>Percentil 95</span>
+          <strong id="stat-p95-power">—</strong>
+          <small>potencia bajo el 95 % de los casos</small>
+        </article>
+        <article class="correlation-stat">
+          <span>Correlación radiación–potencia</span>
+          <strong id="stat-correlation">—</strong>
+          <small id="stat-correlation-label">coeficiente de Pearson</small>
+        </article>
+      </div>
+
+      <div class="analytics-grid">
+        <article class="card analysis-card scatter-card">
+          <div class="card-head">
+            <div>
+              <p class="kicker">Respuesta del sistema</p>
+              <h2>Radiación frente a potencia</h2>
+              <p id="scatter-note">Cada punto representa una observación del periodo.</p>
+            </div>
+            <span class="analysis-badge" id="regression-equation">—</span>
+          </div>
+          <div class="chart-box analysis-chart"><canvas id="chart-scatter"></canvas></div>
+          <div class="axis-notes"><span>Irradiancia (W/m²)</span><span>Potencia (W)</span></div>
+        </article>
+
+        <article class="card analysis-card histogram-card">
+          <div class="card-head">
+            <div>
+              <p class="kicker">Frecuencia</p>
+              <h2>Distribución de potencia</h2>
+              <p>Conteo de observaciones por intervalo.</p>
+            </div>
+          </div>
+          <div class="chart-box analysis-chart"><canvas id="chart-histogram"></canvas></div>
+        </article>
+
+        <article class="card analysis-card anomaly-card">
+          <div class="card-head">
+            <div>
+              <p class="kicker">Condiciones detectadas</p>
+              <h2>Composición del periodo</h2>
+              <p id="anomaly-summary">Clasificación de las lecturas analizadas.</p>
+            </div>
+          </div>
+          <div class="anomaly-breakdown" id="anomaly-breakdown"></div>
+        </article>
+
+        <article class="card analysis-card descriptive-card">
+          <div class="card-head">
+            <div>
+              <p class="kicker">Estadística descriptiva</p>
+              <h2>Resumen por variable</h2>
+              <p>Valores calculados sobre la población seleccionada, sin promediar previamente.</p>
+            </div>
+          </div>
+          <div class="table-wrap stats-table-wrap">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th>Variable</th>
+                  <th>n</th>
+                  <th>Mínimo</th>
+                  <th>Media</th>
+                  <th>Mediana</th>
+                  <th>P95</th>
+                  <th>Máximo</th>
+                  <th>Desv. estándar</th>
+                </tr>
+              </thead>
+              <tbody id="stats-tbody"></tbody>
+            </table>
+          </div>
+        </article>
+      </div>
     </section>
 
     <section class="layout with-thermal">
