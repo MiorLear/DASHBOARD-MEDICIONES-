@@ -122,7 +122,10 @@
 
     <div class="section-label">
       <h2>Última lectura</h2>
-      <span id="latest-when"></span>
+      <div class="latest-meta">
+        <span class="operation-state unknown" id="operation-state">Sin estado</span>
+        <span id="latest-when"></span>
+      </div>
     </div>
 
     <section class="kpis" aria-label="Mediciones actuales">
@@ -180,6 +183,13 @@
             <h2 id="chart-title">Una curva llena de energía</h2>
           </div>
           <div class="chart-tools">
+            <label class="select-wrap source-select">
+              <span class="sr">Fuente de datos</span>
+              <select id="device-filter" aria-label="Fuente de datos">
+                <option value="panel-k9m4">Panel real</option>
+                <option value="panel-k9m4-sim">Serie modelada</option>
+              </select>
+            </label>
             <label class="select-wrap">
               <span class="sr">Medición de la gráfica</span>
               <select id="metric-filter" aria-label="Medición de la gráfica">
@@ -208,8 +218,8 @@
             <span class="sr">Duración del periodo</span>
             <select id="period-length" aria-label="Duración del periodo">
               <option value="48h">48 h</option>
-              <option value="7d" selected>7 días</option>
-              <option value="all">Todo</option>
+              <option value="7d">7 días</option>
+              <option value="all" selected>Todo el registro</option>
             </select>
           </label>
         </header>
@@ -244,7 +254,7 @@
         <div class="vitals" id="vitals" aria-label="Indicadores del panel"></div>
       </article>
 
-      <article class="card thermal">
+      <article class="card thermal" id="thermal-card">
         <div class="card-head">
           <div>
             <h2>Cámara térmica</h2>
@@ -287,6 +297,8 @@
             <thead>
               <tr>
                 <th>Hora</th>
+                <th>Estado</th>
+                <th>Condición</th>
                 <th>Voltaje</th>
                 <th>Corriente</th>
                 <th>Potencia</th>
@@ -295,6 +307,7 @@
                 <th>T. ambiente</th>
                 <th>Humedad</th>
                 <th class="wind-col">Viento</th>
+                <th>Térmica</th>
               </tr>
             </thead>
             <tbody id="tbody"></tbody>

@@ -14,10 +14,10 @@ const fmtClock = new Intl.DateTimeFormat("es-MX", { hour: "2-digit", minute: "2-
 const fmtDate = new Intl.DateTimeFormat("es-MX", { weekday: "long", day: "numeric", month: "long" });
 const fmtDay = new Intl.DateTimeFormat("es-MX", { day: "numeric", month: "short" });
 
-const powerOf = (r) => r.v * r.i;
+const powerOf = (r) => Number.isFinite(r.p) ? r.p : r.v * r.i;
 
 let state = loadState();
-let periodRange = "7d";
+let periodRange = "all";
 let span = "period";
 let metric = "power";
 
@@ -25,6 +25,7 @@ function viewRange() {
   return span === "day" ? "today" : periodRange;
 }
 let tableExpanded = false;
+let tableVisibleCount = 100;
 let pollTimer = null;
 let sensorState = "idle";
 let toastTimer = 0;
@@ -108,11 +109,22 @@ function coerceReading(r) {
   if (!Number.isFinite(t) || !Number.isFinite(v) || !Number.isFinite(i)) return null;
   return {
     t, v, i,
+    id: r.id == null ? null : Number(r.id),
+    p: finiteOrNull(r.p),
     irr: finiteOrNull(r.irr),
     tp: finiteOrNull(r.tp),
     ta: finiteOrNull(r.ta),
     h: finiteOrNull(r.h),
     wind: finiteOrNull(r.wind),
+    light: finiteOrNull(r.light),
+    panelMin: finiteOrNull(r.panelMin),
+    panelMax: finiteOrNull(r.panelMax),
+    rssi: finiteOrNull(r.rssi),
+    sourceType: r.sourceType || null,
+    anomaly: r.anomaly || null,
+    severity: r.severity || null,
+    maintenanceState: r.maintenanceState || null,
+    valid: r.valid == null ? null : Boolean(r.valid),
   };
 }
 
@@ -120,6 +132,34 @@ function finiteOrNull(value) {
   if (value == null || value === "") return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+const PANEL_ACTIVE_POWER_W = 0.02;
+const PANEL_MIN_LIGHT_WM2 = 25;
+const PANEL_DIAGNOSTIC_LIGHT_WM2 = 120;
+
+function panelOperatingState(reading) {
+  if (!reading) return { key: "unknown", label: "Sin estado", detail: "Todavía no hay una lectura disponible." };
+  const power = Math.max(0, powerOf(reading));
+  const irradiance = finiteOrNull(reading.irr);
+  const date = new Date(reading.t);
+  const hour = date.getHours() + date.getMinutes() / 60;
+  const daylightByClock = hour >= SOLAR_RISE && hour <= SOLAR_SET;
+  if (power >= PANEL_ACTIVE_POWER_W) {
+    return { key: "active", label: "Panel activo", detail: "El panel está entregando potencia." };
+  }
+  if ((irradiance != null && irradiance < PANEL_MIN_LIGHT_WM2) || (irradiance == null && !daylightByClock)) {
+    return { key: "rest", label: "Reposo normal", detail: "No hay irradiancia suficiente; el panel apagado o en horario nocturno no representa una falla." };
+  }
+  if (irradiance == null || irradiance < PANEL_DIAGNOSTIC_LIGHT_WM2) {
+    return { key: "low-light", label: "Luz insuficiente", detail: "Hay algo de luz, pero no alcanza para evaluar la producción." };
+  }
+  return { key: "review", label: "Revisar producción", detail: "Hay irradiancia suficiente, pero la potencia permanece anormalmente baja." };
+}
+
+function conditionLabel(value) {
+  if (!value || value === "normal") return "Normal";
+  return String(value).replaceAll("|", " + ").replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function mulberry32(seed) {
@@ -348,9 +388,14 @@ function buildInsights(all, viewed) {
   const eYday = energyUntilSameHour(all, -1);
   const eNow = energyUntilSameHour(all, 0);
   const peak = viewed.reduce((best, r) => (powerOf(r) > powerOf(best) ? r : best), viewed[0]);
-  notes.push(`Hoy van ${formatEnergy(eToday).value} ${formatEnergy(eToday).unit}. El pico del periodo fue ${formatPower(powerOf(peak)).value} ${formatPower(powerOf(peak)).unit} a las ${formatWhen(peak.t)}.`);
+  if (today.length > 1) {
+    notes.push(`Hoy van ${formatEnergy(eToday).value} ${formatEnergy(eToday).unit}. El pico del periodo fue ${formatPower(powerOf(peak)).value} ${formatPower(powerOf(peak)).unit} a las ${formatWhen(peak.t)}.`);
+  } else {
+    const periodEnergy = formatEnergy(energyWh(viewed));
+    notes.push(`En el periodo hay ${periodEnergy.value} ${periodEnergy.unit}. El pico fue ${formatPower(powerOf(peak)).value} ${formatPower(powerOf(peak)).unit} a las ${formatWhen(peak.t)}.`);
+  }
 
-  if (eYday > 30 && eNow >= 0) {
+  if (today.length > 1 && eYday > 30 && eNow >= 0) {
     const pct = ((eNow - eYday) / eYday) * 100;
     if (Math.abs(pct) < 4) notes.push("A esta hora, hoy va casi igual que ayer.");
     else {
@@ -394,8 +439,11 @@ function buildInsights(all, viewed) {
   }
 
   const latest = all[all.length - 1];
-  if (latest && latest.irr != null && latest.irr > 500 && latest.i < 0.2) {
-    notes.splice(1, 0, "Hay buena radiación, pero casi no hay corriente. Puede estar en circuito abierto o con la carga desconectada.");
+  const operation = panelOperatingState(latest);
+  if (operation.key === "rest" || operation.key === "low-light") {
+    notes.splice(1, 0, operation.detail);
+  } else if (operation.key === "review") {
+    notes.splice(1, 0, "Hay irradiancia suficiente, pero casi no hay potencia. Conviene revisar la carga, el cableado o una desconexión.");
   }
 
   const etas = viewed.map((r) => efficiencyOf(r, area)).filter((n) => n != null);
@@ -843,6 +891,8 @@ function render() {
   }
   const metricSelect = document.getElementById("metric-filter");
   if (metricSelect.value !== metric) metricSelect.value = metric;
+  const deviceSelect = document.getElementById("device-filter");
+  if (deviceSelect && deviceSelect.value !== state.settings.sbDevice) deviceSelect.value = state.settings.sbDevice;
 }
 
 function renderIdentity() {
@@ -855,6 +905,11 @@ function renderIdentity() {
 function renderKpis(latest, viewed) {
   const set = (id, text) => { document.getElementById(id).textContent = text; };
   document.getElementById("latest-when").textContent = latest ? formatLatest(latest.t) : "sin muestras";
+  const operation = panelOperatingState(latest);
+  const operationEl = document.getElementById("operation-state");
+  operationEl.className = `operation-state ${operation.key}`;
+  operationEl.textContent = operation.label;
+  operationEl.title = operation.detail;
   if (!latest) {
     ["kpi-v", "kpi-i", "kpi-irr", "kpi-t"].forEach((id) => set(id, "—"));
     ["spark-v", "spark-i", "spark-irr", "spark-t"].forEach((id) => {
@@ -1195,10 +1250,14 @@ function hourlyProfiles(readings) {
 function renderTable(viewed) {
   const body = document.getElementById("tbody");
   const rows = [...viewed].reverse();
-  const visible = tableExpanded ? rows : rows.slice(0, 14);
+  const visible = rows.slice(0, tableExpanded ? tableVisibleCount : 14);
   const more = document.getElementById("btn-more");
   more.hidden = rows.length <= 14;
-  more.textContent = tableExpanded ? "Ver menos" : `Ver las ${rows.length.toLocaleString("es-MX")}`;
+  more.textContent = !tableExpanded
+    ? `Ver más de ${rows.length.toLocaleString("es-MX")}`
+    : tableVisibleCount < rows.length
+      ? `Cargar ${Math.min(100, rows.length - tableVisibleCount).toLocaleString("es-MX")} más`
+      : "Ver menos";
   document.getElementById("table-meta").textContent = rows.length
     ? `${rows.length.toLocaleString("es-MX")} en este periodo, de la más reciente a la más antigua`
     : "Nada en este periodo";
@@ -1210,7 +1269,7 @@ function renderTable(viewed) {
   if (!visible.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 9;
+    td.colSpan = 12;
     td.textContent = "Registra una medición o importa un CSV para ver la tabla.";
     td.style.fontFamily = "Outfit, Segoe UI, sans-serif";
     tr.appendChild(td);
@@ -1219,8 +1278,17 @@ function renderTable(viewed) {
   }
   visible.forEach((reading) => {
     const tr = document.createElement("tr");
+    const operation = panelOperatingState(reading);
+    const thermal = cloudActive() && !sim.active ? nearestThermalFor(reading.t) : null;
+    if (thermal) {
+      tr.className = `has-thermal${cloud.selectedReadingAt === reading.t ? " thermal-selected" : ""}`;
+      tr.tabIndex = 0;
+      tr.setAttribute("aria-label", `Abrir captura térmica asociada a ${formatWhen(reading.t)}`);
+    }
     const cells = [
       formatWhen(reading.t),
+      operation.label,
+      conditionLabel(reading.anomaly),
       `${fmt(reading.v, 2)} V`,
       `${fmt(reading.i, 2)} A`,
       `${formatPower(powerOf(reading)).value} ${formatPower(powerOf(reading)).unit}`,
@@ -1233,13 +1301,31 @@ function renderTable(viewed) {
     cells.forEach((text, index) => {
       const td = document.createElement("td");
       if (index === 0) td.className = "when";
-      if (index === 8) {
+      if (index === 1) td.className = `panel-state ${operation.key}`;
+      if (index === 2) td.className = "condition";
+      if (index === 10) {
         td.className = "wind-col";
         td.hidden = !hasWind;
       }
       td.textContent = text;
       tr.appendChild(td);
     });
+    const thermalCell = document.createElement("td");
+    const thermalButton = document.createElement("button");
+    thermalButton.type = "button";
+    thermalButton.className = "thermal-link";
+    thermalButton.textContent = thermal ? "Ver imagen" : "Sin captura";
+    thermalButton.disabled = !thermal;
+    if (thermal) {
+      const open = () => openThermalForReading(reading, thermal);
+      thermalButton.addEventListener("click", (event) => { event.stopPropagation(); open(); });
+      tr.addEventListener("click", open);
+      tr.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
+      });
+    }
+    thermalCell.appendChild(thermalButton);
+    tr.appendChild(thermalCell);
     body.appendChild(tr);
   });
 }
@@ -1278,19 +1364,20 @@ function renderBanner() {
 function renderStatus() {
   const status = document.getElementById("status");
   const text = document.getElementById("status-text");
-  status.classList.remove("ok", "warn", "sim");
+  status.classList.remove("ok", "warn", "idle", "sim");
   if (sim.active) {
     status.classList.add("sim");
     text.textContent = sim.playing ? "Simulación en vivo" : "Simulación en pausa";
     return;
   }
   if (mqttState !== "off") {
+    const operation = panelOperatingState(readingsSource().at(-1));
     const labels = {
       connecting: ["warn", "Conectando al broker"],
       waiting: ["", "Broker conectado, esperando al ESP32"],
       ok: ["ok", "ESP32 en línea (MQTT)"],
-      stale: ["warn", "ESP32 sin datos recientes"],
-      offline: ["warn", "ESP32 desconectado"],
+      stale: operation.key === "rest" ? ["idle", "Panel inactivo · sin datos recientes"] : ["warn", "ESP32 sin datos recientes"],
+      offline: operation.key === "rest" ? ["idle", "Panel inactivo · sin telemetría"] : ["warn", "ESP32 desconectado"],
       error: ["warn", "No pude conectar al broker"],
     };
     const [cls, label] = labels[mqttState] || ["", "MQTT"];
@@ -1987,9 +2074,19 @@ function bindSim() {
 }
 
 // ---------- Historial en la nube (Supabase) ----------
-// El ESP32 guarda cada lectura con registrar(); aquí solo se lee. historial() devuelve
-// promedios por tramo (máx. ~900 puntos) y el export baja las filas originales.
-const cloud = { readings: [], range: null, loading: false, error: null, frame: null };
+// El ESP32 guarda cada lectura con registrar(); aquí se descargan las filas originales
+// por páginas. La gráfica reduce la densidad al dibujar, pero la tabla conserva el historial.
+const cloud = {
+  readings: [],
+  range: null,
+  loading: false,
+  error: null,
+  frame: null,
+  thermalIndex: [],
+  thermalCache: new Map(),
+  selectedFrameId: null,
+  selectedReadingAt: null,
+};
 
 function cloudActive() {
   const s = state.settings;
@@ -2006,6 +2103,10 @@ function resetCloud() {
   cloud.range = null;
   cloud.error = null;
   cloud.frame = null;
+  cloud.thermalIndex = [];
+  cloud.thermalCache.clear();
+  cloud.selectedFrameId = null;
+  cloud.selectedReadingAt = null;
 }
 
 async function sbRequest(path, options = {}) {
@@ -2027,6 +2128,16 @@ async function sbRequest(path, options = {}) {
   return response.json();
 }
 
+async function sbAll(path, pageSize = 1000) {
+  const rows = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const join = path.includes("?") ? "&" : "?";
+    const page = await sbRequest(`${path}${join}limit=${pageSize}&offset=${offset}`);
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+  }
+}
+
 function rangeStart(key, now = Date.now()) {
   if (key === "all") return null;
   if (key === "today") return startOfDay(now);
@@ -2039,29 +2150,56 @@ async function loadCloud() {
   const range = viewRange();
   cloud.loading = true;
   try {
-    let desde = rangeStart(range);
-    // Los tramos se calculan desde la primera lectura real del periodo; si no, con pocos
-    // datos en una vista de 7 días cada punto promediaría ~11 minutos
+    const desde = rangeStart(range);
     const device = encodeURIComponent(state.settings.sbDevice);
     const since = desde == null ? "" : `&creado=gte.${encodeURIComponent(new Date(desde).toISOString())}`;
-    const first = await sbRequest(`/rest/v1/lecturas?select=creado&dispositivo=eq.${device}${since}&order=creado.asc&limit=1`);
-    if (first.length) desde = Date.parse(first[0].creado);
-    const rows = await sbRequest("/rest/v1/rpc/historial", {
-      method: "POST",
-      body: JSON.stringify({
-        p_dispositivo: state.settings.sbDevice,
-        p_desde: desde == null ? null : new Date(desde).toISOString(),
-        p_hasta: new Date().toISOString(),
-        p_puntos: 900,
-      }),
-    });
+    const readingCols = "id,creado,voltaje,corriente,potencia,irradiancia,luz_pct,temp_ambiente,temp_panel,panel_min,panel_max,rssi,tipo_registro,anomalia,severidad,estado_mantenimiento,dato_valido";
+    const thermalCols = "id,creado,ancho,alto,t_min,t_prom,t_max";
+    const [rows, thermalRows] = await Promise.all([
+      sbAll(`/rest/v1/lecturas?select=${readingCols}&dispositivo=eq.${device}${since}&order=creado.asc`),
+      sbAll(`/rest/v1/termicas?select=${thermalCols}&dispositivo=eq.${device}${since}&order=creado.asc`),
+    ]);
     const history = rows
-      .map((r) => coerceReading({ t: Date.parse(r.t), v: r.voltaje, i: r.corriente, irr: r.irradiancia, tp: r.temp_panel, ta: r.temp_ambiente }))
+      .map((r) => coerceReading({
+        id: r.id,
+        t: Date.parse(r.creado),
+        v: r.voltaje,
+        i: r.corriente,
+        p: r.potencia,
+        irr: r.irradiancia,
+        light: r.luz_pct,
+        tp: r.temp_panel,
+        ta: r.temp_ambiente,
+        panelMin: r.panel_min,
+        panelMax: r.panel_max,
+        rssi: r.rssi,
+        sourceType: r.tipo_registro,
+        anomaly: r.anomalia,
+        severity: r.severidad,
+        maintenanceState: r.estado_mantenimiento,
+        valid: r.dato_valido,
+      }))
       .filter(Boolean);
     const lastT = history.length ? history[history.length - 1].t : 0;
     cloud.readings = [...history, ...cloud.readings.filter((r) => r.live && r.t > lastT)];
+    cloud.thermalIndex = thermalRows.map((row) => ({
+      id: Number(row.id),
+      t: Date.parse(row.creado),
+      w: Number(row.ancho),
+      h: Number(row.alto),
+      lo: finiteOrNull(row.t_min),
+      avg: finiteOrNull(row.t_prom),
+      hi: finiteOrNull(row.t_max),
+    })).filter((row) => Number.isFinite(row.id) && Number.isFinite(row.t));
     cloud.error = null;
-    if (!cloud.frame) loadCloudFrame();
+    if (!cloud.frame && cloud.thermalIndex.length) {
+      try {
+        cloud.frame = await loadCloudFrame(cloud.thermalIndex[cloud.thermalIndex.length - 1]);
+        if (cloud.frame) renderThermal();
+      } catch {
+        // Las lecturas siguen disponibles aunque falle una matriz térmica.
+      }
+    }
   } catch (error) {
     cloud.error = error.message || "error desconocido";
   } finally {
@@ -2072,19 +2210,67 @@ async function loadCloud() {
   render();
 }
 
-async function loadCloudFrame() {
+async function loadCloudFrame(meta) {
   try {
-    const device = encodeURIComponent(state.settings.sbDevice);
-    const rows = await sbRequest(`/rest/v1/termicas?select=creado,ancho,alto,datos&dispositivo=eq.${device}&order=creado.desc&limit=1`);
+    const selected = meta || cloud.thermalIndex[cloud.thermalIndex.length - 1];
+    if (!selected) return null;
+    if (cloud.thermalCache.has(selected.id)) return cloud.thermalCache.get(selected.id);
+    const rows = await sbRequest(`/rest/v1/termicas?select=id,creado,ancho,alto,datos&id=eq.${selected.id}&limit=1`);
     if (!rows.length) return;
     const frame = parseThermal({ w: rows[0].ancho, h: rows[0].alto, scale: 10, data: rows[0].datos });
     if (!frame) return;
     frame.at = Date.parse(rows[0].creado);
     frame.saved = true;
-    cloud.frame = frame;
-    renderThermal();
-  } catch {
+    frame.id = Number(rows[0].id);
+    cloud.thermalCache.set(frame.id, frame);
+    return frame;
+  } catch (error) {
     // Sin imagen guardada el tablero sigue funcionando
+    throw error;
+  }
+}
+
+function nearestThermalFor(timestamp) {
+  const frames = cloud.thermalIndex;
+  if (!frames.length || !Number.isFinite(timestamp)) return null;
+  let lo = 0;
+  let hi = frames.length - 1;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (frames[mid].t < timestamp) lo = mid + 1;
+    else hi = mid;
+  }
+  const candidates = [frames[lo], frames[lo - 1]].filter(Boolean);
+  const nearest = candidates.reduce((best, frame) => !best || Math.abs(frame.t - timestamp) < Math.abs(best.t - timestamp) ? frame : best, null);
+  // No todas las capturas quedaron exactamente a cinco minutos. Cada lectura conserva
+  // acceso a la matriz real más cercana y la interfaz muestra el desfase en segundos.
+  return nearest;
+}
+
+async function openThermalForReading(reading, meta = nearestThermalFor(reading.t)) {
+  if (!meta) {
+    toast("No hay una captura térmica cercana a esta lectura.");
+    return;
+  }
+  try {
+    toast("Cargando la matriz térmica registrada…");
+    const frame = await loadCloudFrame(meta);
+    if (!frame) throw new Error("La captura no está disponible");
+    frame.selectedReadingAt = reading.t;
+    cloud.frame = frame;
+    cloud.selectedFrameId = meta.id;
+    cloud.selectedReadingAt = reading.t;
+    thermalFrame = null;
+    renderThermal();
+    renderTable(inRange(readingsSource(), viewRange()));
+    const card = document.getElementById("thermal-card");
+    card.classList.remove("flash");
+    requestAnimationFrame(() => card.classList.add("flash"));
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    const seconds = Math.round(Math.abs(frame.at - reading.t) / 1000);
+    toast(seconds <= 2 ? "Captura térmica del mismo registro." : `Captura real más cercana: diferencia de ${seconds} s.`);
+  } catch (error) {
+    toast(error.message || "No pude cargar la captura térmica.");
   }
 }
 
@@ -2311,11 +2497,16 @@ function renderThermal() {
     ctx.stroke();
   }
 
+  const selectedOffset = Number.isFinite(frame.selectedReadingAt)
+    ? Math.round(Math.abs(frame.at - frame.selectedReadingAt) / 1000)
+    : null;
   set("thermal-meta", sim.active
     ? `Simulada · ${fmtTime.format(frame.at)} · ${frame.w}×${frame.h} px`
-    : frame.saved
-      ? `Última guardada · ${formatWhen(frame.at)} · ${frame.w}×${frame.h} px`
-      : `Actualizada ${fmtClock.format(frame.at)} · ${frame.w}×${frame.h} px`);
+    : frame.saved && selectedOffset != null
+      ? `Captura registrada · ${formatWhen(frame.at)} · ${frame.w}×${frame.h} px · Δ ${selectedOffset} s`
+      : frame.saved
+        ? `Última guardada · ${formatWhen(frame.at)} · ${frame.w}×${frame.h} px`
+        : `Actualizada ${fmtClock.format(frame.at)} · ${frame.w}×${frame.h} px`);
   set("thermal-min", `${fmt(frame.lo, 1)} °C`);
   set("thermal-max", `${fmt(frame.hi, 1)} °C`);
   set("thermal-lo", `${fmt(frame.lo, 1)} °C`);
@@ -2328,6 +2519,18 @@ function renderThermal() {
 }
 
 function bind() {
+  document.getElementById("device-filter").addEventListener("change", (event) => {
+    state.settings.sbDevice = event.target.value;
+    span = "period";
+    periodRange = "all";
+    tableExpanded = false;
+    tableVisibleCount = 100;
+    resetCloud();
+    saveState();
+    render();
+    renderThermal();
+    toast(event.target.value.endsWith("-sim") ? "Cargando la serie modelada desde Supabase…" : "Cargando las mediciones del panel…");
+  });
   document.getElementById("metric-filter").addEventListener("change", (event) => {
     metric = event.target.value;
     render();
@@ -2342,6 +2545,7 @@ function bind() {
     button.addEventListener("click", () => {
       span = button.dataset.span;
       tableExpanded = false;
+      tableVisibleCount = 100;
       render();
     });
   });
@@ -2352,6 +2556,7 @@ function bind() {
       span = "period";
     }
     tableExpanded = false;
+    tableVisibleCount = 100;
     render();
   });
 
@@ -2498,7 +2703,16 @@ function bind() {
     event.target.value = "";
   });
   document.getElementById("btn-more").addEventListener("click", () => {
-    tableExpanded = !tableExpanded;
+    const total = inRange(readingsSource(), viewRange()).length;
+    if (!tableExpanded) {
+      tableExpanded = true;
+      tableVisibleCount = Math.min(100, total);
+    } else if (tableVisibleCount < total) {
+      tableVisibleCount = Math.min(total, tableVisibleCount + 100);
+    } else {
+      tableExpanded = false;
+      tableVisibleCount = 100;
+    }
     render();
   });
 
