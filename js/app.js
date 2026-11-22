@@ -1,4 +1,5 @@
 const STORAGE_KEY = "observatorio-solar-v1";
+const SOURCE_MIGRATION_KEY = "observatorio-solar-source-v2";
 const SOLAR_RISE = 6.25;
 const SOLAR_SET = 18.75;
 const MAX_GAP_H = 1.5;
@@ -16,7 +17,7 @@ const fmtDay = new Intl.DateTimeFormat("es-MX", { day: "numeric", month: "short"
 
 const powerOf = (r) => Number.isFinite(r.p) ? r.p : r.v * r.i;
 
-let state = loadState();
+let state = null;
 let periodRange = "all";
 let span = "period";
 let metric = "power";
@@ -39,15 +40,15 @@ let liveT = null;
 let lastCommitT = 0;
 let thermalFrame = null;
 
-// Fuentes del panel real. El tablero arranca conectado a ellas para mostrar mediciones
-// reales sin configurar nada. La clave de Supabase es la publicable: solo permite leer
+// Fuentes del observatorio. El tablero abre la serie modelada completa y permite volver
+// al panel real desde el selector. La clave de Supabase es la publicable: solo permite leer
 // (y llamar a registrar(), que exige el token secreto del ESP32).
 const DEFAULT_SOURCES = {
   mqttUrl: "wss://broker.hivemq.com:8884/mqtt",
   mqttTopic: "observatorio-solar/panel-k9m4",
   sbUrl: "https://ixwewxwsjclbgttiguwe.supabase.co",
   sbKey: "sb_publishable_JXV95QeB3gJRMn71o7q4JQ_UihDB3-K",
-  sbDevice: "panel-k9m4",
+  sbDevice: "panel-k9m4-sim",
 };
 
 function defaultSettings() {
@@ -77,6 +78,12 @@ function loadState() {
     Object.keys(DEFAULT_SOURCES).forEach((key) => {
       if (!settings[key]) settings[key] = DEFAULT_SOURCES[key];
     });
+    // La versión publicada antes del dataset guardó panel-k9m4 en localStorage.
+    // Se migra una sola vez; después, la elección del usuario vuelve a persistir.
+    if (localStorage.getItem(SOURCE_MIGRATION_KEY) !== "done") {
+      settings.sbDevice = DEFAULT_SOURCES.sbDevice;
+      localStorage.setItem(SOURCE_MIGRATION_KEY, "done");
+    }
     settings.area = Number(settings.area) > 0 ? Number(settings.area) : 1.7;
     settings.interval = Math.min(3600, Math.max(5, Number(settings.interval) || 15));
     // La simulación de 5 días de versiones anteriores no son mediciones: se descarta
@@ -88,6 +95,10 @@ function loadState() {
     return null;
   }
 }
+
+// DEFAULT_SOURCES debe existir antes de reconstruir la configuración guardada.
+// De lo contrario, defaultSettings() falla durante la carga y se pierde la selección.
+state = loadState();
 
 function saveState() {
   try {
@@ -2747,6 +2758,7 @@ function bind() {
 function init() {
   if (!state) {
     state = { settings: defaultSettings(), readings: [], mode: "real" };
+    localStorage.setItem(SOURCE_MIGRATION_KEY, "done");
     saveState();
   }
   charts.main = new SolarChart(document.getElementById("chart-main"));
